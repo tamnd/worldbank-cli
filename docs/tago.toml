@@ -1,0 +1,10 @@
+title       = "worldbank"
+baseURL     = "https://worldbank-cli.tamnd.com/"
+description = "Browse World Bank Open Data"
+contentDir  = "content"
+outputDir   = "public"
+theme       = "tago-doks"
+syntaxHighlight = "true"
+
+[params]
+github = "https://github.com/tamnd/worldbank-cli"
