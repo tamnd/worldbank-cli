@@ -5,23 +5,21 @@ import (
 )
 
 func (a *App) countriesCmd() *cobra.Command {
-	var region, income string
-	var page int
+	var region string
 
 	cmd := &cobra.Command{
 		Use:   "countries",
 		Short: "List World Bank countries",
 		Long: `List countries from the World Bank Open Data API.
 
-Optionally filter by region code (e.g. LCN for Latin America) or income level
-code (e.g. HIC for high income). Use --page to paginate through results.`,
+Optionally filter by region code (e.g. LCN for Latin America, EAS for East Asia,
+NAC for North America, SSF for Sub-Saharan Africa).`,
 		Example: `  worldbank countries
   worldbank countries --region LCN
-  worldbank countries --income HIC
-  worldbank countries --page 2`,
+  worldbank countries --region EAS --limit 10`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			limit := a.effectiveLimit(50)
-			countries, err := a.client.Countries(cmd.Context(), region, income, page, limit)
+			limit := a.effectiveLimit(20)
+			countries, err := a.client.ListCountries(cmd.Context(), region, limit)
 			if err != nil {
 				return mapFetchErr(err)
 			}
@@ -29,8 +27,6 @@ code (e.g. HIC for high income). Use --page to paginate through results.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&region, "region", "", "filter by region code (e.g. LCN, EAS, NAC)")
-	cmd.Flags().StringVar(&income, "income", "", "filter by income level code (e.g. HIC, LIC, MIC)")
-	cmd.Flags().IntVar(&page, "page", 1, "page number")
+	cmd.Flags().StringVar(&region, "region", "", "filter by region code (e.g. LCN, EAS, NAC, SSF)")
 	return cmd
 }

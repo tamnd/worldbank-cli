@@ -4,6 +4,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -44,7 +45,6 @@ func codeError(code int, err error) error { return &ExitError{Code: code, Err: e
 // App holds shared state threaded through every command.
 type App struct {
 	client *worldbank.Client
-	cfg    worldbank.Config
 
 	output   string
 	fields   []string
@@ -52,11 +52,22 @@ type App struct {
 	template string
 	limit    int
 	quiet    bool
+
+	// client config flags
+	rate      time.Duration
+	timeout   time.Duration
+	retries   int
+	userAgent string
 }
 
 // Root builds the root command and its subtree.
 func Root() *cobra.Command {
-	app := &App{cfg: worldbank.DefaultConfig()}
+	app := &App{
+		rate:      500 * time.Millisecond,
+		timeout:   30 * time.Second,
+		retries:   5,
+		userAgent: worldbank.DefaultUserAgent,
+	}
 
 	root := &cobra.Command{
 		Use:   "worldbank",
@@ -81,16 +92,16 @@ worldbank is an independent tool and is not affiliated with the World Bank.`,
 	pf.StringVar(&app.template, "template", "", "Go text/template applied per record")
 	pf.IntVarP(&app.limit, "limit", "n", 0, "limit number of records (0 = command default)")
 	pf.BoolVarP(&app.quiet, "quiet", "q", false, "suppress progress on stderr")
-	pf.DurationVar(&app.cfg.Rate, "delay", app.cfg.Rate, "minimum spacing between requests")
-	pf.DurationVar(&app.cfg.Timeout, "timeout", app.cfg.Timeout, "per-request timeout")
-	pf.IntVar(&app.cfg.Retries, "retries", app.cfg.Retries, "retry attempts on 429/5xx")
-	pf.StringVar(&app.cfg.UserAgent, "user-agent", app.cfg.UserAgent, "User-Agent sent with each request")
+	pf.DurationVar(&app.rate, "delay", app.rate, "minimum spacing between requests")
+	pf.DurationVar(&app.timeout, "timeout", app.timeout, "per-request timeout")
+	pf.IntVar(&app.retries, "retries", app.retries, "retry attempts on 429/5xx")
+	pf.StringVar(&app.userAgent, "user-agent", app.userAgent, "User-Agent sent with each request")
 
 	root.AddCommand(
 		app.countriesCmd(),
-		app.countryCmd(),
 		app.indicatorsCmd(),
 		app.dataCmd(),
+		app.topicsCmd(),
 		newVersionCmd(),
 	)
 	return root
@@ -107,7 +118,12 @@ func (a *App) setup() error {
 	if !Format(a.output).Valid() {
 		return codeError(exitUsage, fmt.Errorf("unknown output format %q", a.output))
 	}
-	a.client = worldbank.NewClient(a.cfg)
+	c := worldbank.NewClient()
+	c.Rate = a.rate
+	c.HTTP.Timeout = a.timeout
+	c.Retries = a.retries
+	c.UserAgent = a.userAgent
+	a.client = c
 	return nil
 }
 

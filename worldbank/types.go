@@ -2,8 +2,8 @@ package worldbank
 
 // Country is a World Bank country record.
 type Country struct {
-	ID          string `json:"id"`
-	ISO2Code    string `json:"iso2code"`
+	ID          string `kit:"id" json:"id"`
+	ISO2        string `json:"iso2"`
 	Name        string `json:"name"`
 	Region      string `json:"region"`
 	IncomeLevel string `json:"income_level"`
@@ -14,35 +14,35 @@ type Country struct {
 
 // Indicator is a World Bank indicator record.
 type Indicator struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Unit   string `json:"unit"`
-	Source string `json:"source"`
-	Topics string `json:"topics"`
+	ID   string `kit:"id" json:"id"`
+	Name string `json:"name"`
+	Unit string `json:"unit"`
+	Note string `json:"source_note"`
 }
 
 // DataPoint is a single observation for a country/indicator combination.
 type DataPoint struct {
-	Country     string  `json:"country"`
+	CountryID   string  `kit:"id" json:"country_id"`
+	CountryName string  `json:"country_name"`
 	IndicatorID string  `json:"indicator_id"`
-	Year        string  `json:"year"`
+	Date        string  `json:"date"`
 	Value       float64 `json:"value"`
+}
+
+// Topic is a World Bank thematic topic.
+type Topic struct {
+	ID    string `kit:"id" json:"id"`
+	Value string `json:"value"`
+	Note  string `json:"source_note"`
 }
 
 // --- wire types (JSON shapes from the API) ---
 
-type wireMeta struct {
-	Page    int `json:"page"`
-	Pages   int `json:"pages"`
-	PerPage int `json:"per_page"`
-	Total   int `json:"total"`
-}
-
 type wireCountry struct {
-	ID       string `json:"id"`
+	ID      string `json:"id"`
 	Iso2Code string `json:"iso2Code"`
-	Name     string `json:"name"`
-	Region   struct {
+	Name    string `json:"name"`
+	Region  struct {
 		ID    string `json:"id"`
 		Value string `json:"value"`
 	} `json:"region"`
@@ -58,7 +58,7 @@ type wireCountry struct {
 func (w wireCountry) toCountry() Country {
 	return Country{
 		ID:          w.ID,
-		ISO2Code:    w.Iso2Code,
+		ISO2:        w.Iso2Code,
 		Name:        w.Name,
 		Region:      w.Region.Value,
 		IncomeLevel: w.IncomeLevel.Value,
@@ -69,39 +69,22 @@ func (w wireCountry) toCountry() Country {
 }
 
 type wireIndicator struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Unit   string `json:"unit"`
-	Source struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Unit       string `json:"unit"`
+	SourceNote string `json:"sourceNote"`
+	Source     struct {
 		ID    string `json:"id"`
 		Value string `json:"value"`
 	} `json:"source"`
-	Topics []struct {
-		ID    string `json:"id"`
-		Value string `json:"value"`
-	} `json:"topics"`
 }
 
 func (w wireIndicator) toIndicator() Indicator {
-	topics := make([]string, 0, len(w.Topics))
-	for _, t := range w.Topics {
-		if t.Value != "" {
-			topics = append(topics, t.Value)
-		}
-	}
-	topicsStr := ""
-	for i, t := range topics {
-		if i > 0 {
-			topicsStr += "; "
-		}
-		topicsStr += t
-	}
 	return Indicator{
-		ID:     w.ID,
-		Name:   w.Name,
-		Unit:   w.Unit,
-		Source: w.Source.Value,
-		Topics: topicsStr,
+		ID:   w.ID,
+		Name: w.Name,
+		Unit: w.Unit,
+		Note: w.SourceNote,
 	}
 }
 
@@ -114,8 +97,9 @@ type wireDataPoint struct {
 		ID    string `json:"id"`
 		Value string `json:"value"`
 	} `json:"indicator"`
-	Date  string   `json:"date"`
-	Value *float64 `json:"value"`
+	CountryISO3 string   `json:"countryiso3code"`
+	Date        string   `json:"date"`
+	Value       *float64 `json:"value"`
 }
 
 func (w wireDataPoint) toDataPoint() DataPoint {
@@ -124,9 +108,24 @@ func (w wireDataPoint) toDataPoint() DataPoint {
 		val = *w.Value
 	}
 	return DataPoint{
-		Country:     w.Country.Value,
+		CountryID:   w.Country.ID,
+		CountryName: w.Country.Value,
 		IndicatorID: w.Indicator.ID,
-		Year:        w.Date,
+		Date:        w.Date,
 		Value:       val,
+	}
+}
+
+type wireTopic struct {
+	ID         string `json:"id"`
+	Value      string `json:"value"`
+	SourceNote string `json:"sourceNote"`
+}
+
+func (w wireTopic) toTopic() Topic {
+	return Topic{
+		ID:    w.ID,
+		Value: w.Value,
+		Note:  w.SourceNote,
 	}
 }

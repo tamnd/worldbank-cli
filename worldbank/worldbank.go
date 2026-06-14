@@ -13,206 +13,54 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
 
-const (
-	defaultBase      = "https://api.worldbank.org/v2"
-	DefaultUserAgent = "worldbank/dev (+https://github.com/tamnd/worldbank-cli)"
-)
+// Host is the World Bank API host.
+const Host = "api.worldbank.org"
+
+// BaseURL is the API root every request is built from.
+const BaseURL = "https://" + Host + "/v2"
+
+// DefaultUserAgent identifies the client to the World Bank API.
+const DefaultUserAgent = "worldbank/dev (+https://github.com/tamnd/worldbank-cli)"
 
 // ErrNotFound is returned when the API returns an empty data array.
 var ErrNotFound = errors.New("not found")
 
-// Config holds constructor parameters.
-type Config struct {
-	BaseURL   string
-	UserAgent string
-	Rate      time.Duration
-	Retries   int
-	Timeout   time.Duration
-}
+// wbResponse is the top-level 2-element wrapper the World Bank API always returns:
+// element 0 is pagination metadata, element 1 is the data array.
+type wbResponse [2]json.RawMessage
 
-// DefaultConfig returns sensible defaults.
-func DefaultConfig() Config {
-	return Config{
-		BaseURL:   defaultBase,
-		UserAgent: DefaultUserAgent,
-		Rate:      200 * time.Millisecond,
-		Retries:   5,
-		Timeout:   30 * time.Second,
-	}
-}
-
-// Client talks to the World Bank API.
+// Client talks to the World Bank Open Data API.
 type Client struct {
-	http      *http.Client
-	userAgent string
-	baseURL   string
-	rate      time.Duration
-	retries   int
-	last      time.Time
+	HTTP      *http.Client
+	UserAgent string
+	// Rate is the minimum gap between requests. Zero means no pacing.
+	Rate    time.Duration
+	Retries int
+
+	last time.Time
 }
 
-// NewClient returns a Client configured from cfg.
-func NewClient(cfg Config) *Client {
+// NewClient returns a Client with sensible defaults: a 30s timeout, a 500ms
+// minimum gap between requests (polite for a public API), and five retries on
+// transient errors.
+func NewClient() *Client {
 	return &Client{
-		http:      &http.Client{Timeout: cfg.Timeout},
-		userAgent: cfg.UserAgent,
-		baseURL:   strings.TrimRight(cfg.BaseURL, "/"),
-		rate:      cfg.Rate,
-		retries:   cfg.Retries,
+		HTTP:      &http.Client{Timeout: 30 * time.Second},
+		UserAgent: DefaultUserAgent,
+		Rate:      500 * time.Millisecond,
+		Retries:   5,
 	}
 }
 
-// Countries returns a page of countries, optionally filtered by region or income level.
-func (c *Client) Countries(ctx context.Context, region, income string, page, perPage int) ([]Country, error) {
-	u := c.url("/country", map[string]string{
-		"format":   "json",
-		"per_page": fmt.Sprintf("%d", perPage),
-		"page":     fmt.Sprintf("%d", page),
-		"region":   region,
-		"incomelevel": income,
-	})
-	body, err := c.get(ctx, u)
-	if err != nil {
-		return nil, err
-	}
-	var raw [2]json.RawMessage
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("parse countries: %w", err)
-	}
-	if raw[1] == nil || string(raw[1]) == "null" {
-		return nil, ErrNotFound
-	}
-	var items []wireCountry
-	if err := json.Unmarshal(raw[1], &items); err != nil {
-		return nil, fmt.Errorf("parse countries data: %w", err)
-	}
-	out := make([]Country, 0, len(items))
-	for _, it := range items {
-		out = append(out, it.toCountry())
-	}
-	return out, nil
-}
-
-// Country returns a single country by ISO2 or ISO3 code.
-func (c *Client) Country(ctx context.Context, code string) (Country, error) {
-	u := c.url("/country/"+url.PathEscape(strings.ToUpper(code)), map[string]string{
-		"format": "json",
-	})
-	body, err := c.get(ctx, u)
-	if err != nil {
-		return Country{}, err
-	}
-	var raw [2]json.RawMessage
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return Country{}, fmt.Errorf("parse country: %w", err)
-	}
-	if raw[1] == nil || string(raw[1]) == "null" {
-		return Country{}, ErrNotFound
-	}
-	var items []wireCountry
-	if err := json.Unmarshal(raw[1], &items); err != nil {
-		return Country{}, fmt.Errorf("parse country data: %w", err)
-	}
-	if len(items) == 0 {
-		return Country{}, ErrNotFound
-	}
-	return items[0].toCountry(), nil
-}
-
-// Indicators returns a page of indicators, optionally filtered by search term.
-func (c *Client) Indicators(ctx context.Context, search string, page, perPage int) ([]Indicator, error) {
-	u := c.url("/indicator", map[string]string{
-		"format":   "json",
-		"per_page": fmt.Sprintf("%d", perPage),
-		"page":     fmt.Sprintf("%d", page),
-	})
-	body, err := c.get(ctx, u)
-	if err != nil {
-		return nil, err
-	}
-	var raw [2]json.RawMessage
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("parse indicators: %w", err)
-	}
-	if raw[1] == nil || string(raw[1]) == "null" {
-		return nil, ErrNotFound
-	}
-	var items []wireIndicator
-	if err := json.Unmarshal(raw[1], &items); err != nil {
-		return nil, fmt.Errorf("parse indicators data: %w", err)
-	}
-	out := make([]Indicator, 0, len(items))
-	lower := strings.ToLower(search)
-	for _, it := range items {
-		ind := it.toIndicator()
-		if lower == "" || strings.Contains(strings.ToLower(ind.Name), lower) || strings.Contains(strings.ToLower(ind.ID), lower) {
-			out = append(out, ind)
-		}
-	}
-	if len(out) == 0 && search != "" {
-		return nil, ErrNotFound
-	}
-	return out, nil
-}
-
-// Data returns indicator data for a country, most recent first.
-func (c *Client) Data(ctx context.Context, countryCode, indicatorID string, perPage int) ([]DataPoint, error) {
-	path := fmt.Sprintf("/country/%s/indicator/%s",
-		url.PathEscape(strings.ToUpper(countryCode)),
-		url.PathEscape(indicatorID),
-	)
-	u := c.url(path, map[string]string{
-		"format":   "json",
-		"per_page": fmt.Sprintf("%d", perPage),
-		"mrv":      fmt.Sprintf("%d", perPage),
-	})
-	body, err := c.get(ctx, u)
-	if err != nil {
-		return nil, err
-	}
-	var raw [2]json.RawMessage
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("parse data: %w", err)
-	}
-	if raw[1] == nil || string(raw[1]) == "null" {
-		return nil, ErrNotFound
-	}
-	var items []wireDataPoint
-	if err := json.Unmarshal(raw[1], &items); err != nil {
-		return nil, fmt.Errorf("parse data points: %w", err)
-	}
-	out := make([]DataPoint, 0, len(items))
-	for _, it := range items {
-		if it.Value != nil {
-			out = append(out, it.toDataPoint())
-		}
-	}
-	if len(out) == 0 {
-		return nil, ErrNotFound
-	}
-	return out, nil
-}
-
-// url builds a full API URL with query parameters. Empty values are omitted.
-func (c *Client) url(path string, params map[string]string) string {
-	q := url.Values{}
-	for k, v := range params {
-		if v != "" {
-			q.Set(k, v)
-		}
-	}
-	return c.baseURL + path + "?" + q.Encode()
-}
-
-// get fetches a URL with pacing and retries.
-func (c *Client) get(ctx context.Context, rawURL string) ([]byte, error) {
+// Get fetches url and returns the response body. It paces and retries according
+// to the client's settings.
+func (c *Client) Get(ctx context.Context, url string) ([]byte, error) {
 	var lastErr error
-	for attempt := 0; attempt <= c.retries; attempt++ {
+	for attempt := 0; attempt <= c.Retries; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
@@ -220,7 +68,7 @@ func (c *Client) get(ctx context.Context, rawURL string) ([]byte, error) {
 			case <-time.After(backoff(attempt)):
 			}
 		}
-		body, retry, err := c.do(ctx, rawURL)
+		body, retry, err := c.do(ctx, url)
 		if err == nil {
 			return body, nil
 		}
@@ -229,7 +77,7 @@ func (c *Client) get(ctx context.Context, rawURL string) ([]byte, error) {
 			return nil, err
 		}
 	}
-	return nil, fmt.Errorf("get %s: %w", rawURL, lastErr)
+	return nil, fmt.Errorf("get %s: %w", url, lastErr)
 }
 
 func (c *Client) do(ctx context.Context, rawURL string) (body []byte, retry bool, err error) {
@@ -238,9 +86,9 @@ func (c *Client) do(ctx context.Context, rawURL string) (body []byte, retry bool
 	if err != nil {
 		return nil, false, err
 	}
-	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("User-Agent", c.UserAgent)
 
-	resp, err := c.http.Do(req)
+	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, true, err
 	}
@@ -260,11 +108,12 @@ func (c *Client) do(ctx context.Context, rawURL string) (body []byte, retry bool
 	return b, false, nil
 }
 
+// pace blocks until at least Rate has passed since the previous request.
 func (c *Client) pace() {
-	if c.rate <= 0 {
+	if c.Rate <= 0 {
 		return
 	}
-	if wait := c.rate - time.Since(c.last); wait > 0 {
+	if wait := c.Rate - time.Since(c.last); wait > 0 {
 		time.Sleep(wait)
 	}
 	c.last = time.Now()
@@ -276,4 +125,139 @@ func backoff(attempt int) time.Duration {
 		d = 5 * time.Second
 	}
 	return d
+}
+
+// buildURL constructs an API URL with the given path and query parameters.
+// Empty values are omitted.
+func buildURL(path string, params map[string]string) string {
+	var sb strings.Builder
+	sb.WriteString(BaseURL)
+	sb.WriteString(path)
+	sep := "?"
+	for k, v := range params {
+		if v != "" {
+			sb.WriteString(sep)
+			sb.WriteString(k)
+			sb.WriteString("=")
+			sb.WriteString(v)
+			sep = "&"
+		}
+	}
+	return sb.String()
+}
+
+// fetchWB fetches a URL and unmarshals the outer 2-element wrapper.
+func (c *Client) fetchWB(ctx context.Context, rawURL string) (wbResponse, error) {
+	body, err := c.Get(ctx, rawURL)
+	if err != nil {
+		return wbResponse{}, err
+	}
+	var resp wbResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return wbResponse{}, fmt.Errorf("parse response: %w", err)
+	}
+	return resp, nil
+}
+
+// ListCountries returns countries, optionally filtered by region code.
+func (c *Client) ListCountries(ctx context.Context, region string, limit int) ([]Country, error) {
+	params := map[string]string{
+		"format":   "json",
+		"per_page": fmt.Sprintf("%d", limit),
+	}
+	if region != "" {
+		params["region"] = region
+	}
+	resp, err := c.fetchWB(ctx, buildURL("/country", params))
+	if err != nil {
+		return nil, err
+	}
+	if resp[1] == nil || string(resp[1]) == "null" {
+		return nil, ErrNotFound
+	}
+	var items []wireCountry
+	if err := json.Unmarshal(resp[1], &items); err != nil {
+		return nil, fmt.Errorf("parse countries: %w", err)
+	}
+	out := make([]Country, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.toCountry())
+	}
+	return out, nil
+}
+
+// ListIndicators returns indicators from World Development Indicators (source=2).
+func (c *Client) ListIndicators(ctx context.Context, limit int) ([]Indicator, error) {
+	params := map[string]string{
+		"format":   "json",
+		"per_page": fmt.Sprintf("%d", limit),
+		"source":   "2",
+	}
+	resp, err := c.fetchWB(ctx, buildURL("/indicator", params))
+	if err != nil {
+		return nil, err
+	}
+	if resp[1] == nil || string(resp[1]) == "null" {
+		return nil, ErrNotFound
+	}
+	var items []wireIndicator
+	if err := json.Unmarshal(resp[1], &items); err != nil {
+		return nil, fmt.Errorf("parse indicators: %w", err)
+	}
+	out := make([]Indicator, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.toIndicator())
+	}
+	return out, nil
+}
+
+// GetData returns indicator data for one or more countries (semicolon-separated),
+// limited to the most recent mrv values.
+func (c *Client) GetData(ctx context.Context, country, indicator string, mrv int) ([]DataPoint, error) {
+	path := fmt.Sprintf("/country/%s/indicator/%s", country, indicator)
+	params := map[string]string{
+		"format": "json",
+		"mrv":    fmt.Sprintf("%d", mrv),
+	}
+	resp, err := c.fetchWB(ctx, buildURL(path, params))
+	if err != nil {
+		return nil, err
+	}
+	if resp[1] == nil || string(resp[1]) == "null" {
+		return nil, ErrNotFound
+	}
+	var items []wireDataPoint
+	if err := json.Unmarshal(resp[1], &items); err != nil {
+		return nil, fmt.Errorf("parse data: %w", err)
+	}
+	out := make([]DataPoint, 0, len(items))
+	for _, it := range items {
+		if it.Value != nil {
+			out = append(out, it.toDataPoint())
+		}
+	}
+	if len(out) == 0 {
+		return nil, ErrNotFound
+	}
+	return out, nil
+}
+
+// ListTopics returns all World Bank topics.
+func (c *Client) ListTopics(ctx context.Context) ([]Topic, error) {
+	resp, err := c.fetchWB(ctx, buildURL("/topic", map[string]string{"format": "json"}))
+	if err != nil {
+		return nil, err
+	}
+	if resp[1] == nil || string(resp[1]) == "null" {
+		return nil, ErrNotFound
+	}
+	var items []wireTopic
+	if err := json.Unmarshal(resp[1], &items); err != nil {
+		return nil, fmt.Errorf("parse topics: %w", err)
+	}
+	out := make([]Topic, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.toTopic())
+	}
+	return out, nil
 }
