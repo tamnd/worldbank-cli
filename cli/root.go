@@ -98,7 +98,9 @@ worldbank is an independent tool and is not affiliated with the World Bank.`,
 	pf.StringVar(&app.userAgent, "user-agent", app.userAgent, "User-Agent sent with each request")
 
 	root.AddCommand(
+		app.indicatorCmd(),
 		app.countriesCmd(),
+		app.compareCmd(),
 		app.indicatorsCmd(),
 		app.dataCmd(),
 		app.topicsCmd(),

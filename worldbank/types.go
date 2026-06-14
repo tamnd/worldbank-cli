@@ -21,12 +21,14 @@ type Indicator struct {
 }
 
 // DataPoint is a single observation for a country/indicator combination.
+// NullValue is true when the API returned JSON null for the value field.
 type DataPoint struct {
 	CountryID   string  `kit:"id" json:"country_id"`
 	CountryName string  `json:"country_name"`
 	IndicatorID string  `json:"indicator_id"`
 	Date        string  `json:"date"`
 	Value       float64 `json:"value"`
+	NullValue   bool    `json:"-"`
 }
 
 // Topic is a World Bank thematic topic.
@@ -104,6 +106,7 @@ type wireDataPoint struct {
 
 func (w wireDataPoint) toDataPoint() DataPoint {
 	val := 0.0
+	nullVal := w.Value == nil
 	if w.Value != nil {
 		val = *w.Value
 	}
@@ -113,6 +116,7 @@ func (w wireDataPoint) toDataPoint() DataPoint {
 		IndicatorID: w.Indicator.ID,
 		Date:        w.Date,
 		Value:       val,
+		NullValue:   nullVal,
 	}
 }
 
